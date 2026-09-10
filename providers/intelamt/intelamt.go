@@ -420,11 +420,15 @@ func (c *Conn) Inventory(ctx context.Context) (device *common.Device, err error)
 		})
 	}
 
-	// AMT reports a capacity and an identifier for storage devices but no
-	// model or serial, so only what it actually provides is recorded.
+	// Model and serial come from the storage package AMT reports alongside
+	// each media access device, and are empty when it reports none.
 	for _, drive := range inv.Drives {
 		dev.Drives = append(dev.Drives, &common.Drive{
-			Common:        common.Common{Description: drive.ID},
+			Common: common.Common{
+				Description: drive.ID,
+				Model:       drive.Model,
+				Serial:      drive.SerialNumber,
+			},
 			ID:            drive.ID,
 			CapacityBytes: int64(drive.MaxMediaSizeKB) * 1024, //nolint:gosec // CIM reports kilobytes
 		})

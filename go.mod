@@ -54,4 +54,4 @@ require (
 // The AMT feature work lives on the tinkerbell-community iamt fork's
 // amt-wsman-migration branch, which keeps the upstream module path. Point this
 // at a tagged release once the work lands upstream.
-replace github.com/jacobweinstock/iamt => github.com/tinkerbell-community/iamt v0.0.0-20260910200131-fe7475ab8fde
+replace github.com/jacobweinstock/iamt => github.com/tinkerbell-community/iamt v0.0.0-20260910214403-be779a24a30d
