@@ -376,11 +376,17 @@ func (c *Conn) Inventory(ctx context.Context) (device *common.Device, err error)
 	}
 
 	for _, cpu := range inv.CPUs {
+		// AMT's CIM_Processor DeviceID ("CPU 0") is both the processor's
+		// identifier and its socket designation, and is the only thing
+		// distinguishing one package from another, since AMT reports no
+		// per-package serial. Consumers key on ID or Slot.
 		dev.CPUs = append(dev.CPUs, &common.CPU{
 			Common: common.Common{
 				Description: cpu.Name,
 				Model:       cpu.Name,
 			},
+			ID:           cpu.ID,
+			Slot:         cpu.ID,
 			ClockSpeedHz: int64(cpu.MaxClockMHz) * 1_000_000,
 		})
 	}
@@ -399,11 +405,18 @@ func (c *Conn) Inventory(ctx context.Context) (device *common.Device, err error)
 		})
 	}
 
+	// AMT models each interface as a single CIM_EthernetPort, so the adapter
+	// and its one port are the same object and carry the same name. The name
+	// is repeated onto the port because consumers read the port's identifier,
+	// not the adapter's, when labelling a MAC.
 	for _, nic := range inv.NICs {
 		dev.NICs = append(dev.NICs, &common.NIC{
-			Common:   common.Common{Description: nic.Name},
-			ID:       nic.Name,
-			NICPorts: []*common.NICPort{{MacAddress: nic.MACAddress}},
+			Common: common.Common{Description: nic.Name},
+			ID:     nic.Name,
+			NICPorts: []*common.NICPort{{
+				ID:         nic.Name,
+				MacAddress: nic.MACAddress,
+			}},
 		})
 	}
 
@@ -412,6 +425,7 @@ func (c *Conn) Inventory(ctx context.Context) (device *common.Device, err error)
 	for _, drive := range inv.Drives {
 		dev.Drives = append(dev.Drives, &common.Drive{
 			Common:        common.Common{Description: drive.ID},
+			ID:            drive.ID,
 			CapacityBytes: int64(drive.MaxMediaSizeKB) * 1024, //nolint:gosec // CIM reports kilobytes
 		})
 	}
