@@ -486,7 +486,7 @@ func TestInventory(t *testing.T) {
 				SerialNumber: "TBARP10006D0",
 			},
 			BIOS: iamt.BIOS{Vendor: "ASUSTeK COMPUTER INC.", Version: "CRARLV57"},
-			CPUs: []iamt.CPU{{Name: "Managed System CPU", MaxClockMHz: 5300}},
+			CPUs: []iamt.CPU{{ID: "CPU 0", Name: "Managed System CPU", MaxClockMHz: 5300}},
 			Memory: []iamt.MemoryModule{
 				{BankLabel: "BANK 0", Manufacturer: "Corsair", CapacityBytes: 51539607552, ClockMHz: 5600},
 				{BankLabel: "BANK 1", Manufacturer: "Corsair", CapacityBytes: 51539607552, ClockMHz: 5600},
@@ -513,6 +513,11 @@ func TestInventory(t *testing.T) {
 	if len(dev.CPUs) != 1 || dev.CPUs[0].ClockSpeedHz != 5_300_000_000 {
 		t.Errorf("cpus = %+v", dev.CPUs)
 	}
+	// The DeviceID has to reach both ID and Slot: it is all that distinguishes
+	// one package from another, and downstream consumers read one or the other.
+	if dev.CPUs[0].ID != "CPU 0" || dev.CPUs[0].Slot != "CPU 0" {
+		t.Errorf("cpu id/slot = %q/%q, want CPU 0 for both", dev.CPUs[0].ID, dev.CPUs[0].Slot)
+	}
 	if len(dev.Memory) != 2 {
 		t.Fatalf("memory modules = %d, want 2", len(dev.Memory))
 	}
@@ -525,6 +530,12 @@ func TestInventory(t *testing.T) {
 	}
 	if len(dev.NICs) != 1 || dev.NICs[0].NICPorts[0].MacAddress != "88:ae:dd:75:3d:a0" {
 		t.Errorf("nics = %+v", dev.NICs)
+	}
+	// The port carries the name too. Consumers label a MAC by the port's
+	// identifier rather than the adapter's, so a name only on the adapter
+	// leaves the MAC anonymous.
+	if dev.NICs[0].ID != "Wired0" || dev.NICs[0].NICPorts[0].ID != "Wired0" {
+		t.Errorf("nic/port id = %q/%q, want Wired0 for both", dev.NICs[0].ID, dev.NICs[0].NICPorts[0].ID)
 	}
 	// AMT's own version belongs on the BMC, not the host.
 	if dev.BMC == nil || dev.BMC.Firmware == nil || dev.BMC.Firmware.Installed != "18.1.18" {
@@ -540,6 +551,10 @@ func TestInventory(t *testing.T) {
 	}
 	if dev.Drives[0].CapacityBytes != 2048408248*1024 {
 		t.Errorf("drive capacity = %d", dev.Drives[0].CapacityBytes)
+	}
+	// The identifier is the only thing telling two same-sized drives apart.
+	if dev.Drives[0].ID != "MEDIA DEV 0" {
+		t.Errorf("drive id = %q, want MEDIA DEV 0", dev.Drives[0].ID)
 	}
 }
 
