@@ -51,7 +51,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Development-only: the AMT feature work lives on the tinkerbell-community
-// iamt fork's amt-wsman-migration branch, which keeps the upstream module
-// path. Replace with a released version before merging.
-replace github.com/jacobweinstock/iamt => ../iamt
+// The AMT feature work lives on the tinkerbell-community iamt fork's
+// amt-wsman-migration branch, which keeps the upstream module path. Point this
+// at a tagged release once the work lands upstream.
+replace github.com/jacobweinstock/iamt => github.com/tinkerbell-community/iamt v0.0.0-20260910200131-fe7475ab8fde
