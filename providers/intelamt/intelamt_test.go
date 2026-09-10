@@ -492,7 +492,12 @@ func TestInventory(t *testing.T) {
 				{BankLabel: "BANK 1", Manufacturer: "Corsair", CapacityBytes: 51539607552, ClockMHz: 5600},
 			},
 			NICs:   []iamt.NIC{{MACAddress: "88:ae:dd:75:3d:a0", Name: "Wired0"}},
-			Drives: []iamt.Drive{{ID: "MEDIA DEV 0", MaxMediaSizeKB: 2048408248}},
+			Drives: []iamt.Drive{{
+				ID:             "MEDIA DEV 0",
+				MaxMediaSizeKB: 2048408248,
+				Model:          "Lexar SSD NM790 2TB",
+				SerialNumber:   "QH7495W100766P220J",
+			}},
 		},
 	}
 	conn := &Conn{client: m}
@@ -541,13 +546,14 @@ func TestInventory(t *testing.T) {
 	if dev.BMC == nil || dev.BMC.Firmware == nil || dev.BMC.Firmware.Installed != "18.1.18" {
 		t.Errorf("bmc = %+v", dev.BMC)
 	}
-	// AMT reports no model or serial for drives, so those must stay empty
-	// rather than be filled with a generic element name.
 	if len(dev.Drives) != 1 {
 		t.Fatalf("drives = %d, want 1", len(dev.Drives))
 	}
-	if dev.Drives[0].Model != "" || dev.Drives[0].Serial != "" {
-		t.Errorf("drive model/serial should be empty, got %q/%q", dev.Drives[0].Model, dev.Drives[0].Serial)
+	// Model and serial come from the drive's storage package. They must not be
+	// filled from the media access device's element name, which is the same
+	// constant string on every drive.
+	if dev.Drives[0].Model != "Lexar SSD NM790 2TB" || dev.Drives[0].Serial != "QH7495W100766P220J" {
+		t.Errorf("drive model/serial = %q/%q", dev.Drives[0].Model, dev.Drives[0].Serial)
 	}
 	if dev.Drives[0].CapacityBytes != 2048408248*1024 {
 		t.Errorf("drive capacity = %d", dev.Drives[0].CapacityBytes)
