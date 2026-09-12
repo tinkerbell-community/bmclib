@@ -1,9 +1,15 @@
 package intelamt
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/bmc-toolbox/common"
 	"github.com/go-logr/logr"
@@ -38,6 +44,8 @@ type mock struct {
 	insertedMedia []string
 	insertSecure  []bool
 	ejectedMedia  int
+	mountedSizes  []int64
+	errMountISO   error
 	setPasswords  [][3]string
 }
 
@@ -117,6 +125,14 @@ func (m *mock) InsertVirtualMedia(_ context.Context, imageURL string, enforceSec
 func (m *mock) EjectVirtualMedia(context.Context) error {
 	m.ejectedMedia++
 	return nil
+}
+
+func (m *mock) MountISO(_ context.Context, _ io.ReaderAt, size int64) (*iamt.RedirectSession, error) {
+	if m.errMountISO != nil {
+		return nil, m.errMountISO
+	}
+	m.mountedSizes = append(m.mountedSizes, size)
+	return nil, nil
 }
 
 func (m *mock) SetAdminPassword(_ context.Context, username, realm, newPassword string) error {
@@ -375,16 +391,32 @@ func TestBootDeviceSetRefusesPersistent(t *testing.T) {
 }
 
 func TestSetVirtualMedia(t *testing.T) {
-	t.Run("inserts an image", func(t *testing.T) {
+	// A tiny image server that supports HEAD (Content-Length) and range GETs,
+	// which is what the streaming reader needs.
+	iso := make([]byte, 4*2048)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(iso)))
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			return
+		}
+		http.ServeContent(w, r, "a.iso", time.Time{}, bytes.NewReader(iso))
+	}))
+	defer srv.Close()
+
+	t.Run("mounts an image over redirection", func(t *testing.T) {
 		m := &mock{}
 		conn := &Conn{client: m}
 
-		ok, err := conn.SetVirtualMedia(context.Background(), "CD", "https://x.example.com/a.iso")
+		ok, err := conn.SetVirtualMedia(context.Background(), "CD", srv.URL+"/a.iso")
 		if err != nil || !ok {
 			t.Fatalf("SetVirtualMedia: ok=%v err=%v", ok, err)
 		}
-		if len(m.insertedMedia) != 1 || m.insertedMedia[0] != "https://x.example.com/a.iso" {
-			t.Errorf("inserted = %v", m.insertedMedia)
+		if len(m.mountedSizes) != 1 || m.mountedSizes[0] != int64(len(iso)) {
+			t.Errorf("mounted sizes = %v, want [%d]", m.mountedSizes, len(iso))
+		}
+		if len(m.insertedMedia) != 0 {
+			t.Errorf("IDER mount must not use OCR InsertVirtualMedia: %v", m.insertedMedia)
 		}
 	})
 
@@ -399,37 +431,21 @@ func TestSetVirtualMedia(t *testing.T) {
 		if m.ejectedMedia != 1 {
 			t.Errorf("ejected = %d, want 1", m.ejectedMedia)
 		}
-		if len(m.insertedMedia) != 0 {
-			t.Errorf("an eject inserted media: %v", m.insertedMedia)
-		}
 	})
 
 	t.Run("non-optical kind is refused", func(t *testing.T) {
 		m := &mock{}
 		conn := &Conn{client: m}
 
-		if _, err := conn.SetVirtualMedia(context.Background(), "floppy", "https://x/a.img"); err == nil {
+		if _, err := conn.SetVirtualMedia(context.Background(), "floppy", srv.URL+"/a.img"); err == nil {
 			t.Fatal("expected floppy to be refused")
 		}
-		if len(m.insertedMedia) != 0 {
+		if len(m.mountedSizes) != 0 {
 			t.Error("a refused kind still reached the device")
-		}
-	})
-
-	t.Run("secure boot policy is passed through", func(t *testing.T) {
-		m := &mock{}
-		conn := &Conn{client: m, config: Config{EnforceSecureBoot: true}}
-
-		if _, err := conn.SetVirtualMedia(context.Background(), "CD", "https://x/a.iso"); err != nil {
-			t.Fatalf("SetVirtualMedia: %v", err)
-		}
-		if len(m.insertSecure) != 1 || !m.insertSecure[0] {
-			t.Errorf("enforceSecureBoot = %v, want [true]", m.insertSecure)
 		}
 	})
 }
 
-// SetHTTPBootURI and SetVirtualMedia are the same firmware mechanism.
 func TestSetHTTPBootURI(t *testing.T) {
 	m := &mock{}
 	conn := &Conn{client: m}
@@ -491,7 +507,7 @@ func TestInventory(t *testing.T) {
 				{BankLabel: "BANK 0", Manufacturer: "Corsair", CapacityBytes: 51539607552, ClockMHz: 5600},
 				{BankLabel: "BANK 1", Manufacturer: "Corsair", CapacityBytes: 51539607552, ClockMHz: 5600},
 			},
-			NICs:   []iamt.NIC{{MACAddress: "88:ae:dd:75:3d:a0", Name: "Wired0"}},
+			NICs: []iamt.NIC{{MACAddress: "88:ae:dd:75:3d:a0", Name: "Wired0"}},
 			Drives: []iamt.Drive{{
 				ID:             "MEDIA DEV 0",
 				MaxMediaSizeKB: 2048408248,

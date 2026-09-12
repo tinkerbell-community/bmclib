@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -53,12 +54,15 @@ type iamtClient interface {
 	ClearBootOverride(context.Context) error
 	InsertVirtualMedia(ctx context.Context, imageURL string, enforceSecureBoot bool) error
 	EjectVirtualMedia(context.Context) error
+	MountISO(ctx context.Context, image io.ReaderAt, size int64) (*iamt.RedirectSession, error)
 	SetAdminPassword(ctx context.Context, username, realm, newPassword string) error
 }
 
 // Conn is a connection to a BMC via Intel AMT
 type Conn struct {
 	client iamtClient
+	// mounted is the active storage-redirection session, if any.
+	mounted *iamt.RedirectSession
 	// config is a value rather than a pointer so a Conn built directly --
 	// which the tests do -- has usable zero-value settings instead of
 	// panicking on first use.
@@ -172,7 +176,14 @@ func (c *Conn) Open(ctx context.Context) (err error) {
 
 // Close a connection to a BMC
 func (c *Conn) Close(ctx context.Context) (err error) {
-	return c.client.Close(ctx)
+	if c.mounted != nil {
+		err = c.mounted.Close()
+		c.mounted = nil
+	}
+	if closeErr := c.client.Close(ctx); closeErr != nil && err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // Compatible tests whether a BMC is compatible with the AMT provider
@@ -286,7 +297,14 @@ func (c *Conn) PowerSet(ctx context.Context, state string) (ok bool, err error) 
 // removal.
 func (c *Conn) SetVirtualMedia(ctx context.Context, kind, mediaURL string) (ok bool, err error) {
 	if mediaURL == "" {
-		if err := c.client.EjectVirtualMedia(ctx); err != nil {
+		if c.mounted != nil {
+			err = c.mounted.Close()
+			c.mounted = nil
+		}
+		if ejectErr := c.client.EjectVirtualMedia(ctx); ejectErr != nil && err == nil {
+			err = ejectErr
+		}
+		if err != nil {
 			return false, err
 		}
 		return true, nil
@@ -298,9 +316,23 @@ func (c *Conn) SetVirtualMedia(ctx context.Context, kind, mediaURL string) (ok b
 		return false, fmt.Errorf("%w: AMT supports optical media only, got %q", ErrUnsupportedBootDevice, kind)
 	}
 
-	if err := c.client.InsertVirtualMedia(ctx, mediaURL, c.config.EnforceSecureBoot); err != nil {
+	// AMT has no CD emulation of its own: it boots an image over storage
+	// redirection (IDE-R/USB-R), reading the image from here. The image is
+	// streamed from the URL with range requests, so nothing is downloaded to
+	// disk. A prior mount is replaced.
+	if c.mounted != nil {
+		_ = c.mounted.Close()
+		c.mounted = nil
+	}
+	ra, err := newHTTPReaderAt(ctx, mediaURL, nil)
+	if err != nil {
 		return false, err
 	}
+	sess, err := c.client.MountISO(ctx, ra, ra.Size())
+	if err != nil {
+		return false, err
+	}
+	c.mounted = sess
 	return true, nil
 }
 
