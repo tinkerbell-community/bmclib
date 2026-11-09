@@ -88,7 +88,13 @@ func bootTargetToBootDeviceType(target schemas.BootSource) (bmc.BootDeviceType, 
 	return "", errors.New("invalid boot device")
 }
 
-// SystemBootDeviceSet set the boot device for the system.
+// SystemBootDeviceSet sets the boot override of the system: its target, once or
+// continuous, and its firmware mode, UEFI with efiBoot and Legacy without.
+//
+// Only those properties are sent. The Boot object read from the BMC also holds
+// read-only annotations, such as BootSourceOverrideTarget@Redfish.AllowableValues,
+// and properties some BMCs do not accept back as they report them: OpenBMC on an
+// ASRock Rack X570D4I-2T rejects a PATCH of the whole object with 400 for both.
 func (c *Client) SystemBootDeviceSet(_ context.Context, bootDevice string, setPersistent, efiBoot bool) (ok bool, err error) {
 	if err := c.SessionActive(); err != nil {
 		return false, errors.Wrap(bmclibErrs.ErrNotAuthenticated, err.Error())
@@ -99,34 +105,52 @@ func (c *Client) SystemBootDeviceSet(_ context.Context, bootDevice string, setPe
 		return false, err
 	}
 
-	boot := system.Boot
-
-	boot.BootSourceOverrideTarget, err = bootDeviceStringToTarget(bootDevice)
+	target, err := bootDeviceStringToTarget(bootDevice)
 	if err != nil {
 		return false, err
 	}
 
+	enabled := schemas.OnceBootSourceOverrideEnabled
 	if setPersistent {
-		boot.BootSourceOverrideEnabled = schemas.ContinuousBootSourceOverrideEnabled
-	} else {
-		boot.BootSourceOverrideEnabled = schemas.OnceBootSourceOverrideEnabled
+		enabled = schemas.ContinuousBootSourceOverrideEnabled
 	}
 
+	mode := schemas.LegacyBootSourceOverrideMode
 	if efiBoot {
-		boot.BootSourceOverrideMode = schemas.UEFIBootSourceOverrideMode
-	} else {
-		boot.BootSourceOverrideMode = schemas.LegacyBootSourceOverrideMode
+		mode = schemas.UEFIBootSourceOverrideMode
 	}
 
-	if err = system.SetBoot(&boot); err != nil {
-		// Some redfish implementations don't like all the fields we're setting so we
-		// try again here with a minimal set of fields. This has shown to work with the
-		// Redfish implementation on HP DL160 Gen10.
-		secondTry := schemas.Boot{}
-		secondTry.BootSourceOverrideTarget = boot.BootSourceOverrideTarget
-		secondTry.BootSourceOverrideEnabled = boot.BootSourceOverrideEnabled
-		if err := system.SetBoot(&secondTry); err != nil {
+	boot := schemas.Boot{BootSourceOverrideTarget: target, BootSourceOverrideEnabled: enabled}
+	// A BMC that reports no boot mode has none to set.
+	if system.Boot.BootSourceOverrideMode != "" {
+		boot.BootSourceOverrideMode = mode
+	}
+
+	firstErr := system.SetBoot(&boot)
+	if firstErr == nil {
+		return true, nil
+	}
+	if boot.BootSourceOverrideMode == "" {
+		return false, firstErr
+	}
+
+	// Some BMCs reject BootSourceOverrideMode, or the mode asked for: a UEFI-only
+	// BMC rejects Legacy, and HP DL160 Gen10 accepts only the target and enabled.
+	// Set the boot device without it.
+	if err := system.SetBoot(&schemas.Boot{BootSourceOverrideTarget: target, BootSourceOverrideEnabled: enabled}); err != nil {
+		return false, err
+	}
+
+	// The BMC kept the mode it had. A UEFI boot in another mode fails or boots
+	// something else, so do not report success when it is not UEFI.
+	if efiBoot {
+		system, err := c.System()
+		if err != nil {
 			return false, err
+		}
+
+		if kept := system.Boot.BootSourceOverrideMode; kept != "" && kept != schemas.UEFIBootSourceOverrideMode {
+			return false, errors.Wrapf(firstErr, "boot device set, but the BMC refused boot mode %s and kept %s", mode, kept)
 		}
 	}
 
